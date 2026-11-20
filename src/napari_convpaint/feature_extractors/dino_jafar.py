@@ -2,7 +2,7 @@ import warnings
 import numpy as np
 import torch
 import torch.nn.functional as F
-from ..utils import get_device_from_torch_model, guided_model_download
+from ..utils import get_device_from_torch_model, guided_model_download, resolve_legacy_device_string, empty_device_cache
 from typing import List
 import copy
 
@@ -190,16 +190,9 @@ class DinoJafarFeatures(FeatureExtractor):
         elif isinstance(device, str):
             warnings.warn(f"Resolving device from string '{device}' is deprecated. Please provide a torch.device object instead.")
             # Legacy fallback for direct FE usage outside ConvpaintModel.
-            if device == "cpu":
-                device = torch.device("cpu")
-            elif torch.cuda.is_available():
-                device = torch.device("cuda:0")
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = torch.device("mps")
-            else:
-                device = torch.device("cpu")
+            device = resolve_legacy_device_string(device)
         else:
-            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'mps').")
+            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'xpu', 'mps').")
 
         current_device = get_device_from_torch_model(self.model)
         if current_device != device:
@@ -400,10 +393,9 @@ class DinoJafarFeatures(FeatureExtractor):
                     # Track the blending weights used for normalization
                     weight_cpu[:, :, top:top + tile_px, left:left + tile_px] += w2d.cpu()
 
-                    # Free temporary locals and clear MPS cache if available
+                    # Free temporary locals and clear MPS/XPU cache if available
                     del img_tile, lr_tile, per_scale_feats, feat_cat, chunks, weighted
-                    if torch.backends.mps.is_available():
-                        torch.mps.empty_cache()  # avoid MPS fragmentation issues
+                    empty_device_cache(dev)  # avoid MPS/XPU fragmentation issues
 
         # Normalize accumulated sums by weights and concatenate per-scale results
         eps = 1e-8

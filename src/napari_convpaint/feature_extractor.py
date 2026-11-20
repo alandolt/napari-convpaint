@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import warnings
 from .param import Param
-from .utils import scale_img, rescale_features, reduce_to_patch_multiple, pad_to_shape, get_device_from_torch_model, concat_features
+from .utils import scale_img, rescale_features, reduce_to_patch_multiple, pad_to_shape, get_device_from_torch_model, concat_features, resolve_legacy_device_string
 
 class FeatureExtractor:
     def __init__(self, model_name="vgg16", model=None, **kwargs):
@@ -265,16 +265,9 @@ class FeatureExtractor:
         elif isinstance(device, str):
             warnings.warn(f"Resolving device from string '{device}' is deprecated. Please provide a torch.device object instead.")
             # Legacy fallback for direct FE usage outside ConvpaintModel.
-            if device == "cpu":
-                device = torch.device("cpu")
-            elif torch.cuda.is_available():
-                device = torch.device("cuda:0")
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = torch.device("mps")
-            else:
-                device = torch.device("cpu")
+            device = resolve_legacy_device_string(device)
         else:
-            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'mps').")
+            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'xpu', 'mps').")
 
         if self.model is None or not hasattr(self.model, "to"):
             self.device = device
@@ -299,7 +292,7 @@ class FeatureExtractor:
             The list of devices that the feature extractor supports.
         """
         if self.model is not None and hasattr(self.model, "to"):
-            return [torch.device("cuda"), torch.device("mps"), torch.device("cpu")]
+            return [torch.device("cuda"), torch.device("xpu"), torch.device("mps"), torch.device("cpu")]
         else:
             return [torch.device("cpu")]
 

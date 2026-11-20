@@ -1527,7 +1527,7 @@ class ConvpaintModel:
 
         When using CatBoost, the compute device is chosen by `use_device`.
         Supported values are "auto", "gpu", and "cpu".
-        Note that CatBoost needs CUDA to use GPU, and MPS is not supported.
+        Note that CatBoost needs CUDA to use GPU, and MPS/XPU are not supported.
         If use_rf is True, the RandomForestClassifier is used, which does not support GPU training.
 
         Parameters

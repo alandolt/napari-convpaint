@@ -3564,14 +3564,18 @@ class ConvpaintWidget(QWidget):
     def _reset_device_options(self):
         """Reset device dropdown availability and synchronize FE/CLF device policies."""
         default_tooltip = 'Select device policy for feature extraction and classifier.'
-        no_gpu_tooltip = 'No CUDA/MPS backend available. Device is fixed to CPU.'
+        no_gpu_tooltip = 'No CUDA/XPU/MPS backend available. Device is fixed to CPU.'
         cuda_both_tooltip = 'CUDA is available and supported by this feature extractor. GPU can be used for both feature extraction and classifier.'
         cuda_clf_only_tooltip = 'CUDA is available, but this feature extractor does not support CUDA. GPU can still be used for the classifier; feature extraction will run on CPU.'
         mps_fe_only_tooltip = 'MPS is available and supported by this feature extractor, but CatBoost does not support MPS. Classifier will use CPU in all cases.'
         mps_none_tooltip = 'MPS is available, but neither this feature extractor nor CatBoost supports MPS. Device is fixed to CPU.'
+        xpu_fe_only_tooltip = 'XPU (Intel GPU) is available and supported by this feature extractor, but CatBoost does not support XPU. Classifier will use CPU in all cases.'
+        xpu_none_tooltip = 'XPU (Intel GPU) is available, but neither this feature extractor nor CatBoost supports XPU. Device is fixed to CPU.'
 
         import torch
-        mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        from .utils import is_mps_available, is_xpu_available
+        mps_available = is_mps_available()
+        xpu_available = is_xpu_available()
         cuda_available = torch.cuda.is_available()
 
         fe_model = getattr(self.cp_model, "fe_model", None)
@@ -3579,7 +3583,8 @@ class ConvpaintWidget(QWidget):
         supported_types = {device.type for device in fe_supported_devices if isinstance(device, torch.device)}
         fe_supports_cuda = "cuda" in supported_types
         fe_supports_mps = "mps" in supported_types
-        gpu_available = cuda_available or (mps_available and fe_supports_mps)
+        fe_supports_xpu = "xpu" in supported_types
+        gpu_available = cuda_available or (mps_available and fe_supports_mps) or (xpu_available and fe_supports_xpu)
 
         self.device_dropdown.blockSignals(True)
         # First, adjust the available options in the dropdown based on FE support and GPU availability
@@ -3594,7 +3599,11 @@ class ConvpaintWidget(QWidget):
                 self.fe_device = 'cpu'
                 self.clf_device = 'cpu'
                 self.device_dropdown.setCurrentText('cpu')
-                if mps_available and not cuda_available: # FE supports only cuda or neither, but only MPS is available
+                if xpu_available and not cuda_available: # FE does not support XPU, and only XPU is available
+                    self.device_dropdown.setToolTip(xpu_none_tooltip)
+                    if downgrade_from_gpu: # Warn actively in case the policy was 'gpu' and downgrading to CPU was necessary
+                        show_info(xpu_none_tooltip)
+                elif mps_available and not cuda_available: # FE supports only cuda or neither, but only MPS is available
                     self.device_dropdown.setToolTip(mps_none_tooltip)
                     if downgrade_from_gpu: # Warn actively in case the policy was 'gpu' and downgrading to CPU was necessary
                         show_info(mps_none_tooltip)
@@ -3618,6 +3627,8 @@ class ConvpaintWidget(QWidget):
                     self.device_dropdown.setToolTip(cuda_both_tooltip)
                 elif cuda_available and not fe_supports_cuda:
                     self.device_dropdown.setToolTip(cuda_clf_only_tooltip)
+                elif xpu_available and fe_supports_xpu:
+                    self.device_dropdown.setToolTip(xpu_fe_only_tooltip)
                 elif mps_available and fe_supports_mps:
                     self.device_dropdown.setToolTip(mps_fe_only_tooltip)
                 else: # This case should not happen, but we catch it just in case
@@ -3841,9 +3852,8 @@ class ConvpaintWidget(QWidget):
         supported_devices = self.cp_model.fe_model.supported_devices() if hasattr(self.cp_model.fe_model, 'supported_devices') else []
         supported = [str(d) for d in supported_devices]
         # gpu_device = get_fe_device(use_device="gpu", supported_devices=supported_devices, warn=False) # See if there's a gpu option
-        device_string = 'supports: cuda, cpu' if any('cuda' in d for d in supported) else(
-                        'supports: mps, cpu' if any('mps' in d for d in supported) else
-                        'uses cpu only')
+        gpu_backends = [b for b in ('cuda', 'xpu', 'mps') if any(b in d for d in supported)]
+        device_string = ('supports: ' + ', '.join(gpu_backends + ['cpu'])) if gpu_backends else 'uses cpu only'
         # Put together and post
         descr = (fe_name +
         f': {num_layers} layer' + ('' if num_layers == 1 else 's') +

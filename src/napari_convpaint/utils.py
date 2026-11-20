@@ -1071,6 +1071,40 @@ def _normalize_device_policy(use_device):
     
     return use_device
 
+def is_mps_available():
+    """Return True if the PyTorch MPS (Apple Silicon) backend is available."""
+    return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
+def is_xpu_available():
+    """Return True if the PyTorch XPU (Intel GPU) backend is available."""
+    try:
+        return hasattr(torch, "xpu") and torch.xpu.is_available()
+    except Exception:
+        return False
+
+def resolve_legacy_device_string(device):
+    """
+    Resolve a legacy device string (e.g. "cpu", "gpu", "cuda", "mps", "xpu") to a torch.device.
+    "cpu" maps to CPU; any other value picks the first available backend (CUDA > XPU > MPS > CPU).
+    """
+    if device == "cpu":
+        return torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda:0")
+    if is_xpu_available():
+        return torch.device("xpu:0")
+    if is_mps_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+def empty_device_cache(device=None):
+    """Release cached memory on MPS/XPU backends (no-op otherwise)."""
+    dev_type = getattr(device, "type", device)
+    if dev_type in (None, "mps") and is_mps_available():
+        torch.mps.empty_cache()
+    if dev_type in (None, "xpu") and is_xpu_available():
+        torch.xpu.empty_cache()
+
 def get_fe_device(use_device="auto", supported_devices=None, warn=True):
     """
     Get the concrete runtime device to use for feature extraction.
@@ -1081,7 +1115,7 @@ def get_fe_device(use_device="auto", supported_devices=None, warn=True):
         Device policy. Supported values are "gpu", "cpu", and "auto" (default).
         Legacy booleans are accepted for compatibility: True -> "gpu", False -> "cpu".
     supported_devices : list, optional
-        Devices supported by the FE, e.g. [torch.device("cuda"), torch.device("mps")].
+        Devices supported by the FE, e.g. [torch.device("cuda"), torch.device("xpu"), torch.device("mps")].
         If None, assumes no GPU backend is supported by the FE.
     warn : bool, optional
         Whether to emit fallback warnings when explicit GPU was requested.
@@ -1107,24 +1141,30 @@ def get_fe_device(use_device="auto", supported_devices=None, warn=True):
         elif isinstance(dev, str):
             supported_types.add(torch.device(dev).type)
     supports_cuda = 'cuda' in supported_types
+    supports_xpu = 'xpu' in supported_types
     supports_mps = 'mps' in supported_types
 
     # Check GPU backends available in the runtime environment
     cuda_available = torch.cuda.is_available()
-    mps_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    xpu_available = is_xpu_available()
+    mps_available = is_mps_available()
 
-    # If a device/backend is supported by FE and available by the system, use it 
+    # If a device/backend is supported by FE and available by the system, use it
     if cuda_available and supports_cuda:
         return torch.device('cuda:0')
+    if xpu_available and supports_xpu:
+        return torch.device('xpu:0')
     if mps_available and supports_mps:
         return torch.device('mps')
 
     # If a GPU was explicitly requested but not available or supported, warn and fall back to CPU
     if use_device == 'gpu' and warn:
-        if not supports_cuda and not supports_mps:
+        if not supports_cuda and not supports_mps and not supports_xpu:
             warnings.warn('The selected Feature Extractor does not support any available GPU backend. Falling back to CPU.')
-        elif not cuda_available and not mps_available:
-            warnings.warn('Neither CUDA nor MPS is available. Falling back to CPU for feature extractor.')
+        elif not cuda_available and not mps_available and not xpu_available:
+            warnings.warn('Neither CUDA, XPU nor MPS is available. Falling back to CPU for feature extractor.')
+        elif xpu_available and not supports_xpu:
+            warnings.warn('XPU is available, but not supported by the Feature Extractor. Falling back to CPU for feature extractor.')
         # From above, we know that at least one, but not a matching GPU backend is supported, so we can be specific in the warning:
         elif all([supports_cuda, not supports_mps, mps_available, not cuda_available]):
             warnings.warn('Only CUDA is supported by the Feature Extractor, but only MPS is available. Falling back to CPU for feature extractor.')
@@ -1165,7 +1205,7 @@ def get_catboost_device(use_device="auto", warn=True):
     """
     Get the device to use for CatBoost operations.
     If CUDA is available, use the first available GPU.
-    Otherwise, use CPU (even if MPS is available since CatBoost does not support MPS).
+    Otherwise, use CPU (even if MPS/XPU is available since CatBoost does not support them).
 
     Parameters:
     ----------
@@ -1189,8 +1229,10 @@ def get_catboost_device(use_device="auto", warn=True):
 
     if use_device == 'gpu' and warn:
         warnings.warn('CUDA is not available. Falling back to CPU for CatBoost.')
-        if torch.backends.mps.is_available():
+        if is_mps_available():
             warnings.warn('Note for MPS users: MPS is available on this device but not supported by CatBoost.')
+        if is_xpu_available():
+            warnings.warn('Note for XPU users: XPU is available on this device but not supported by CatBoost.')
     return 'CPU'
 
 def normalize_image(image, image_mean, image_std):

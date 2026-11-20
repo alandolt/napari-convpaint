@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import skimage
 import importlib.util
-from ..utils import get_device_from_torch_model
+from ..utils import get_device_from_torch_model, resolve_legacy_device_string
 
 def import_models():
     try:
@@ -93,16 +93,9 @@ class CellposeFeatures(FeatureExtractor):
         elif isinstance(device, str):
             warnings.warn(f"Resolving device from string '{device}' is deprecated. Please provide a torch.device object instead.")
             # Legacy fallback for direct FE usage outside ConvpaintModel.
-            if device == "cpu":
-                device = torch.device("cpu")
-            elif torch.cuda.is_available():
-                device = torch.device("cuda:0")
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = torch.device("mps")
-            else:
-                device = torch.device("cpu")
+            device = resolve_legacy_device_string(device)
         else:
-            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'mps').")
+            raise ValueError(f"Invalid device: {device}. Please provide a torch.device object or a string ('cpu', 'cuda', 'xpu', 'mps').")
 
         if self.model is None:
             self.device = device
@@ -112,7 +105,7 @@ class CellposeFeatures(FeatureExtractor):
         if current_device != device:
             self.model.net = self.model.net.to(device)
             self.model.device = device
-            self.model.gpu = device.type in ("cuda", "mps")
+            self.model.gpu = device.type in ("cuda", "xpu", "mps")
             self.model.net.eval()
 
         self.device = device
@@ -123,7 +116,7 @@ class CellposeFeatures(FeatureExtractor):
         if (self.model is not None and
                 hasattr(self.model, "net")
         ):
-            return [torch.device("cuda"), torch.device("mps"), torch.device("cpu")]
+            return [torch.device("cuda"), torch.device("xpu"), torch.device("mps"), torch.device("cpu")]
         else:
             return [torch.device("cpu")]
 
